@@ -1,0 +1,7 @@
+.cursor
+.vscode
+.env
+.env.local
+vnv
+*.md
+*.pt
