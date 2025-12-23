@@ -19,23 +19,25 @@ class AgentAWSSignalingClient:
     """
     AWS signaling client for agent-specific streams.
     
-    Connects to AWS signaling server as agent:{user_id}:{agent_id}
+    Connects to AWS signaling server as agent:{user_id}:{camera_id}:{agent_id}
     and streams processed frames (with bounding boxes).
     """
     
-    def __init__(self, shared_store: Dict[str, Any], user_id: str, agent_id: str):
+    def __init__(self, shared_store: Dict[str, Any], user_id: str, camera_id: str, agent_id: str):
         """
         Initialize agent AWS signaling client.
         
         Args:
             shared_store: Shared memory dict from multiprocessing.Manager
             user_id: User ID
+            camera_id: Camera ID
             agent_id: Agent ID
         """
         self.shared_store = shared_store
         self.user_id = user_id
+        self.camera_id = camera_id
         self.agent_id = agent_id
-        self.client_id = f"agent:{user_id}:{agent_id}"
+        self.client_id = f"agent:{camera_id}"
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self.pc: Optional[RTCPeerConnection] = None
         self._running = False
@@ -127,7 +129,7 @@ class AgentAWSSignalingClient:
                     await self.pc.setLocalDescription(offer)
                     
                     # Target the specific viewer for this agent stream
-                    viewer_id = f"viewer:{self.user_id}:{self.agent_id}"
+                    viewer_id = f"viewer:{self.user_id}:{self.camera_id}:{self.agent_id}"
                     offer_msg = {
                         "type": "offer",
                         "from": self.client_id,

@@ -14,7 +14,9 @@ from agent.application.services.streaming_service import StreamingService
 from agent.domain.repositories.agent_repository import AgentRepository
 from agent.infrastructure.database.agent_repository_impl import MongoAgentRepository
 from agent.application.services.agent_service import AgentService
-from agent.domain.repositories.camera_repository import CameraRepository
+from agent.domain.repositories.device_repository import DeviceRepository
+from agent.infrastructure.database.device_repository_impl import MongoDeviceRepository
+from agent.application.services.device_service import DeviceService
 
 
 # Singleton instances
@@ -23,6 +25,8 @@ _camera_service: Optional[CameraService] = None
 _streaming_service: Optional[StreamingService] = None
 _agent_repository: Optional[AgentRepository] = None
 _agent_service: Optional[AgentService] = None
+_device_repository: Optional[DeviceRepository] = None
+_device_service: Optional[DeviceService] = None
 
 
 def get_camera_repository() -> CameraRepository:
@@ -94,4 +98,31 @@ def get_agent_service() -> AgentService:
         camera_repository = get_camera_repository()
         _agent_service = AgentService(repository, camera_repository)
     return _agent_service
+
+
+def get_device_repository() -> DeviceRepository:
+    """
+    Get device repository instance (singleton).
+    
+    Returns:
+        DeviceRepository instance
+    """
+    global _device_repository
+    if _device_repository is None:
+        _device_repository = MongoDeviceRepository()
+    return _device_repository
+
+
+def get_device_service() -> DeviceService:
+    """
+    Get device service instance (singleton).
+    
+    Returns:
+        DeviceService instance
+    """
+    global _device_service
+    if _device_service is None:
+        repository = get_device_repository()
+        _device_service = DeviceService(repository)
+    return _device_service
 

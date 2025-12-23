@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from agent.api.routes.cameras import router as cameras_router
 from agent.api.routes.agents import router as agents_router
+from agent.api.routes.devices import router as devices_router
 from agent.runner.runner import main as run_runner
 from agent.application.services.streaming_service import StreamingService
 
@@ -37,6 +38,7 @@ app.add_middleware(
 # Include routers
 app.include_router(cameras_router)
 app.include_router(agents_router)
+app.include_router(devices_router)
 
 # Global shared store (shared between Runner and Streaming Service)
 _shared_store = None
@@ -98,18 +100,18 @@ async def monitor_cameras_and_start_streams():
             for agent in active_agents:
                 camera = camera_repo.find_by_id(agent.camera_id)
                 if camera:
-                    key = f"{camera.user_id}:{agent.agent_id}"
+                    key = f"{camera.user_id}:{camera.camera_id}:{agent.agent_id}"
                     active_agent_keys.add(key)
                     
                     # Start stream for new active agent
                     if key not in _streaming_service._agent_clients:
-                        await _streaming_service.start_agent_stream(camera.user_id, agent.agent_id)
+                        await _streaming_service.start_agent_stream(camera.user_id,camera.camera_id, agent.agent_id)
             
             # Stop streams for inactive agents
             for key in list(_streaming_service._agent_clients.keys()):
                 if key not in active_agent_keys:
-                    user_id, agent_id = key.split(":", 1)
-                    await _streaming_service.stop_agent_stream(user_id, agent_id)
+                    user_id, camera_id, agent_id = key.split(":", 2)
+                    await _streaming_service.stop_agent_stream(user_id, camera_id, agent_id)
         
         except Exception as e:
             print(f"[main] ⚠️  Error monitoring cameras and agents: {e}")

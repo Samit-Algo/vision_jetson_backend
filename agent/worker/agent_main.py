@@ -32,6 +32,7 @@ if __package__ is None or __package__ == "":
 
 from agent.utils.db import get_collection
 from agent.utils.utils import iso_now, parse_iso
+from agent.utils.event_notifier import send_event_to_backend_sync
 from agent.yolo_model.yolo_utils import init_yolo_model, check_event_match
 from agent.rule_engine.engine import evaluate_rules
 from agent.worker.video_io import open_video_capture
@@ -59,12 +60,20 @@ def sleep_with_heartbeat(tasks_collection, task_id: str, seconds: int) -> bool:
             print(f"[worker {task_id}] ⏹️ Stopping (task deleted)")
             return True
         stop_requested = bool(task_document.get("stop_requested")) if task_document else False
-        end_at_dt = parse_iso(task_document.get("end_at")) if task_document else None
+        end_at_value = task_document.get("end_at") if task_document else None
+        # Handle both datetime objects (from MongoDB) and strings
+        if isinstance(end_at_value, datetime):
+            end_at_dt = end_at_value
+            # Ensure timezone-aware (MongoDB dates might be naive)
+            if end_at_dt.tzinfo is None:
+                end_at_dt = end_at_dt.replace(tzinfo=timezone.utc)
+        else:
+            end_at_dt = parse_iso(end_at_value) if end_at_value else None
         now = datetime.now(timezone.utc)
         if stop_requested or (end_at_dt and now >= end_at_dt):
             status = "completed" if end_at_dt and now >= end_at_dt else "cancelled"
             tasks_collection.update_one({"_id": ObjectId(task_id)}, {"$set": {"status": status, "stopped_at": iso_now(), "updated_at": iso_now()}})
-            print(f"[worker {task_id}] ⏹️ Stopping (status={status})")
+            print(f"[worker {task_id}] ⏹️ Stopping (status={status}, end_at={end_at_dt}, now={now})")
             return True
         time.sleep(1)
     return False
@@ -174,12 +183,20 @@ def run_task_worker(task_id: str, shared_store: Optional["Dict[str, Any]"] = Non
                     print(f"[worker {task_id}] ⏹️ Stopping (task deleted)")
                     return
                 stop_requested = bool(task_document.get("stop_requested")) if task_document else False
-                end_at_dt = parse_iso(task_document.get("end_at")) if task_document else None
+                end_at_value = task_document.get("end_at") if task_document else None
+                # Handle both datetime objects (from MongoDB) and strings
+                if isinstance(end_at_value, datetime):
+                    end_at_dt = end_at_value
+                    # Ensure timezone-aware (MongoDB dates might be naive)
+                    if end_at_dt.tzinfo is None:
+                        end_at_dt = end_at_dt.replace(tzinfo=timezone.utc)
+                else:
+                    end_at_dt = parse_iso(end_at_value) if end_at_value else None
                 now = datetime.now(timezone.utc)
                 if stop_requested or (end_at_dt and now >= end_at_dt):
                     status = "completed" if end_at_dt and now >= end_at_dt else "cancelled"
                     tasks_collection.update_one({"_id": ObjectId(task_id)}, {"$set": {"status": status, "stopped_at": iso_now(), "updated_at": iso_now()}})
-                    print(f"[worker {task_id}] ⏹️ Stopping (status={status})")
+                    print(f"[worker {task_id}] ⏹️ Stopping (status={status}, end_at={end_at_dt}, now={now})")
                     return
 
                 # FPS pacing
@@ -262,13 +279,13 @@ def run_task_worker(task_id: str, shared_store: Optional["Dict[str, Any]"] = Non
                 }
                 
                 # Draw bounding boxes and publish processed frame for agent stream
+                processed_frame = None
+                agent_id = task.get("agent_id") or task_id
+                
                 if shared_store is not None and loaded_rules:
                     try:
                         # Draw bounding boxes based on agent rules
                         processed_frame = draw_bounding_boxes(frame.copy(), detections, loaded_rules)
-                        
-                        # Get agent_id from task (use agent_id if available, else use task_id)
-                        agent_id = task.get("agent_id") or task_id
                         
                         # Convert processed frame to bytes
                         frame_bytes = processed_frame.tobytes()
@@ -314,6 +331,36 @@ def run_task_worker(task_id: str, shared_store: Optional["Dict[str, Any]"] = Non
                 if event and event.get("label"):
                     event_label = str(event["label"]).strip()
                     print(f"[worker {task_id}] 🔔 {event_label} | agent='{agent_name}' | video_time={video_ts}")
+                    
+                    # Send event with annotated frame to web backend
+                    if processed_frame is not None:
+                        try:
+                            send_event_to_backend_sync(
+                                event=event,
+                                annotated_frame=processed_frame,
+                                agent_id=agent_id,
+                                agent_name=agent_name,
+                                camera_id=camera_id,
+                                video_timestamp=video_ts,
+                                detections=detections
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            print(f"[worker {task_id}] ⚠️  Error sending event to backend: {exc}")
+                    elif loaded_rules:
+                        # If processed_frame wasn't created but we have rules, create it now for event notification
+                        try:
+                            processed_frame = draw_bounding_boxes(frame.copy(), detections, loaded_rules)
+                            send_event_to_backend_sync(
+                                event=event,
+                                annotated_frame=processed_frame,
+                                agent_id=agent_id,
+                                agent_name=agent_name,
+                                camera_id=camera_id,
+                                video_timestamp=video_ts,
+                                detections=detections
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            print(f"[worker {task_id}] ⚠️  Error creating/sending event to backend: {exc}")
                 else:
                     print(f"[worker {task_id}] ℹ️ No rule match | agent='{agent_name}' | video_time={video_ts}")
 
@@ -350,12 +397,20 @@ def run_task_worker(task_id: str, shared_store: Optional["Dict[str, Any]"] = Non
                         print(f"[worker {task_id}] ⏹️ Stopping (task deleted)")
                         return
                     stop_requested = bool(task_document.get("stop_requested")) if task_document else False
-                    end_at_dt = parse_iso(task_document.get("end_at")) if task_document else None
+                    end_at_value = task_document.get("end_at") if task_document else None
+                    # Handle both datetime objects (from MongoDB) and strings
+                    if isinstance(end_at_value, datetime):
+                        end_at_dt = end_at_value
+                        # Ensure timezone-aware (MongoDB dates might be naive)
+                        if end_at_dt.tzinfo is None:
+                            end_at_dt = end_at_dt.replace(tzinfo=timezone.utc)
+                    else:
+                        end_at_dt = parse_iso(end_at_value) if end_at_value else None
                     now = datetime.now(timezone.utc)
                     if stop_requested or (end_at_dt and now >= end_at_dt):
                         status = "completed" if end_at_dt and now >= end_at_dt else "cancelled"
                         tasks_collection.update_one({"_id": ObjectId(task_id)}, {"$set": {"status": status, "stopped_at": iso_now(), "updated_at": iso_now()}})
-                        print(f"[worker {task_id}] ⏹️ Stopping (status={status})")
+                        print(f"[worker {task_id}] ⏹️ Stopping (status={status}, end_at={end_at_dt}, now={now})")
                         return
 
                     # FPS pacing
@@ -426,10 +481,12 @@ def run_task_worker(task_id: str, shared_store: Optional["Dict[str, Any]"] = Non
                     }
                     
                     # Draw bounding boxes and publish processed frame for agent stream (patrol mode)
+                    processed_frame = None
+                    agent_id = task.get("agent_id") or task_id
+                    
                     if shared_store is not None and loaded_rules:
                         try:
                             processed_frame = draw_bounding_boxes(frame.copy(), detections, loaded_rules)
-                            agent_id = task.get("agent_id") or task_id
                             frame_bytes = processed_frame.tobytes()
                             height, width = processed_frame.shape[0], processed_frame.shape[1]
                             hub_frame_index = entry.get("frame_index", frame_index) if use_hub and isinstance(entry, dict) else frame_index
@@ -467,6 +524,36 @@ def run_task_worker(task_id: str, shared_store: Optional["Dict[str, Any]"] = Non
                     if event and event.get("label"):
                         event_label = str(event["label"]).strip()
                         print(f"[worker {task_id}] 🔔 {event_label} | agent='{agent_name}' | video_time={video_ts}")
+                        
+                        # Send event with annotated frame to web backend
+                        if processed_frame is not None:
+                            try:
+                                send_event_to_backend_sync(
+                                    event=event,
+                                    annotated_frame=processed_frame,
+                                    agent_id=agent_id,
+                                    agent_name=agent_name,
+                                    camera_id=camera_id,
+                                    video_timestamp=video_ts,
+                                    detections=detections
+                                )
+                            except Exception as exc:  # noqa: BLE001
+                                print(f"[worker {task_id}] ⚠️  Error sending event to backend: {exc}")
+                        elif loaded_rules:
+                            # If processed_frame wasn't created but we have rules, create it now for event notification
+                            try:
+                                processed_frame = draw_bounding_boxes(frame.copy(), detections, loaded_rules)
+                                send_event_to_backend_sync(
+                                    event=event,
+                                    annotated_frame=processed_frame,
+                                    agent_id=agent_id,
+                                    agent_name=agent_name,
+                                    camera_id=camera_id,
+                                    video_timestamp=video_ts,
+                                    detections=detections
+                                )
+                            except Exception as exc:  # noqa: BLE001
+                                print(f"[worker {task_id}] ⚠️  Error creating/sending event to backend: {exc}")
                     else:
                         print(f"[worker {task_id}] ℹ️ No rule match | agent='{agent_name}' | video_time={video_ts}")
 

@@ -104,7 +104,7 @@ class StreamingService:
         # Stop all agent clients
         for key in list(self._agent_clients.keys()):
             user_id, agent_id = key.split(":", 1)
-            await self.stop_agent_stream(user_id, agent_id)
+            await self.stop_agent_stream(user_id, camera_id, agent_id)
         
         print("[streaming] 🛑 Streaming service stopped")
     
@@ -116,7 +116,7 @@ class StreamingService:
         """Get number of active camera streams."""
         return len(self._clients)
     
-    async def start_agent_stream(self, user_id: str, agent_id: str) -> None:
+    async def start_agent_stream(self, user_id: str, camera_id: str, agent_id: str) -> None:
         """
         Start streaming for a specific agent.
         
@@ -124,13 +124,13 @@ class StreamingService:
             user_id: User ID
             agent_id: Agent ID
         """
-        key = f"{user_id}:{agent_id}"
+        key = f"{user_id}:{camera_id}:{agent_id}"
         
         if key in self._agent_clients:
             print(f"[streaming] ⚠️  Agent stream already running for {agent_id}")
             return
         
-        client = AgentAWSSignalingClient(self.shared_store, user_id, agent_id)
+        client = AgentAWSSignalingClient(self.shared_store, user_id, camera_id, agent_id)
         self._agent_clients[key] = client
         
         # Start streaming in background task
@@ -139,9 +139,9 @@ class StreamingService:
         
         print(f"[streaming] 🎯 Started AWS stream for agent: {agent_id} (user: {user_id})")
     
-    async def stop_agent_stream(self, user_id: str, agent_id: str) -> None:
+    async def stop_agent_stream(self, user_id: str, camera_id: str, agent_id: str) -> None:
         """Stop streaming for a specific agent."""
-        key = f"{user_id}:{agent_id}"
+        key = f"{user_id}:{camera_id}:{agent_id}"
         
         if key in self._agent_clients:
             await self._agent_clients[key].stop()
