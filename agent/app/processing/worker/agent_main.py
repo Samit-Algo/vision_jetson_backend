@@ -33,6 +33,7 @@ if __package__ is None or __package__ == "":
 from app.utils.db import get_collection
 from app.utils.datetime_utils import now, now_iso, parse_iso
 from app.utils.event_notifier import send_event_to_backend_sync
+from app.utils.event_session_manager import get_event_session_manager
 from app.processing.yolo_model.yolo_utils import init_yolo_model, check_event_match
 from app.processing.rule_engine.engine import evaluate_rules
 from app.processing.worker.video_io import open_video_capture
@@ -355,37 +356,44 @@ def run_task_worker(task_id: str, shared_store: Optional["Dict[str, Any]"] = Non
                     event_label = str(event["label"]).strip()
                     print(f"[worker {task_id}] 🔔 {event_label} | agent='{agent_name}' | video_time={video_ts}")
                     
-                    # Send event with annotated frame to web backend
+                    # Handle event through session manager (with runtime video splitting)
                     if processed_frame is not None:
                         try:
-                            send_event_to_backend_sync(
-                                event=event,
-                                annotated_frame=processed_frame,
+                            session_manager = get_event_session_manager()
+                            session_manager.handle_event_frame(
                                 agent_id=agent_id,
-                                agent_name=agent_name,
+                                rule_index=event.get("rule_index", 0),
+                                event_label=event_label,
+                                frame=processed_frame,
                                 camera_id=camera_id,
+                                agent_name=agent_name,
+                                detections=detections,
                                 video_timestamp=video_ts,
-                                detections=detections
+                                fps=fps
                             )
                         except Exception as exc:  # noqa: BLE001
-                            print(f"[worker {task_id}] ⚠️  Error sending event to backend: {exc}")
+                            print(f"[worker {task_id}] ⚠️  Error handling event frame: {exc}")
                     elif loaded_rules:
                         # If processed_frame wasn't created but we have rules, create it now for event notification
                         try:
                             processed_frame = draw_bounding_boxes(frame.copy(), detections, loaded_rules)
-                            send_event_to_backend_sync(
-                                event=event,
-                                annotated_frame=processed_frame,
+                            session_manager = get_event_session_manager()
+                            session_manager.handle_event_frame(
                                 agent_id=agent_id,
-                                agent_name=agent_name,
+                                rule_index=event.get("rule_index", 0),
+                                event_label=event_label,
+                                frame=processed_frame,
                                 camera_id=camera_id,
+                                agent_name=agent_name,
+                                detections=detections,
                                 video_timestamp=video_ts,
-                                detections=detections
+                                fps=fps
                             )
                         except Exception as exc:  # noqa: BLE001
-                            print(f"[worker {task_id}] ⚠️  Error creating/sending event to backend: {exc}")
+                            print(f"[worker {task_id}] ⚠️  Error creating/handling event frame: {exc}")
                 else:
-                    print(f"[worker {task_id}] ℹ️ No rule match | agent='{agent_name}' | video_time={video_ts}")
+                    pass
+                    # print(f"[worker {task_id}] ℹ️ No rule match | agent='{agent_name}' | video_time={video_ts}")
 
                 # Heartbeat
                 tasks_collection.update_one({"id": task_id}, {"$set": {"updated_at": now_iso()}})
@@ -552,35 +560,41 @@ def run_task_worker(task_id: str, shared_store: Optional["Dict[str, Any]"] = Non
                         event_label = str(event["label"]).strip()
                         print(f"[worker {task_id}] 🔔 {event_label} | agent='{agent_name}' | video_time={video_ts}")
                         
-                        # Send event with annotated frame to web backend
+                        # Handle event through session manager (with runtime video splitting)
                         if processed_frame is not None:
                             try:
-                                send_event_to_backend_sync(
-                                    event=event,
-                                    annotated_frame=processed_frame,
+                                session_manager = get_event_session_manager()
+                                session_manager.handle_event_frame(
                                     agent_id=agent_id,
-                                    agent_name=agent_name,
+                                    rule_index=event.get("rule_index", 0),
+                                    event_label=event_label,
+                                    frame=processed_frame,
                                     camera_id=camera_id,
+                                    agent_name=agent_name,
+                                    detections=detections,
                                     video_timestamp=video_ts,
-                                    detections=detections
+                                    fps=fps
                                 )
                             except Exception as exc:  # noqa: BLE001
-                                print(f"[worker {task_id}] ⚠️  Error sending event to backend: {exc}")
+                                print(f"[worker {task_id}] ⚠️  Error handling event frame: {exc}")
                         elif loaded_rules:
                             # If processed_frame wasn't created but we have rules, create it now for event notification
                             try:
                                 processed_frame = draw_bounding_boxes(frame.copy(), detections, loaded_rules)
-                                send_event_to_backend_sync(
-                                    event=event,
-                                    annotated_frame=processed_frame,
+                                session_manager = get_event_session_manager()
+                                session_manager.handle_event_frame(
                                     agent_id=agent_id,
-                                    agent_name=agent_name,
+                                    rule_index=event.get("rule_index", 0),
+                                    event_label=event_label,
+                                    frame=processed_frame,
                                     camera_id=camera_id,
+                                    agent_name=agent_name,
+                                    detections=detections,
                                     video_timestamp=video_ts,
-                                    detections=detections
+                                    fps=fps
                                 )
                             except Exception as exc:  # noqa: BLE001
-                                print(f"[worker {task_id}] ⚠️  Error creating/sending event to backend: {exc}")
+                                print(f"[worker {task_id}] ⚠️  Error creating/handling event frame: {exc}")
                     else:
                         print(f"[worker {task_id}] ℹ️ No rule match | agent='{agent_name}' | video_time={video_ts}")
 

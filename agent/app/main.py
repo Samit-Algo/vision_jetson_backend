@@ -141,16 +141,22 @@ def create_application() -> FastAPI:
         
         Startup sequence:
         1. Create shared_store (multiprocessing.Manager().dict())
-        2. Start Runner in background thread → Starts CameraPublisher → Writes frames to shared_store
-        3. Wait 3 seconds for CameraPublisher to initialize
-        4. Start Streaming Service (AWS mode) → Connects to AWS as camera clients
-        5. Start camera monitoring task → Starts streams for active cameras
+        2. Initialize Event Session Manager (for event video splitting)
+        3. Start Runner in background thread → Starts CameraPublisher → Writes frames to shared_store
+        4. Wait 3 seconds for CameraPublisher to initialize
+        5. Start Streaming Service (AWS mode) → Connects to AWS as camera clients
+        6. Start camera monitoring task → Starts streams for active cameras
         """
         # Step 1: Create shared store (shared between Runner and Streaming Service)
         shared_store = get_shared_store()
         print("[main] 📦 Created shared_store for frame sharing")
         
-        # Step 2: Start Runner in background thread
+        # Step 2: Initialize Event Session Manager
+        from app.utils.event_session_manager import get_event_session_manager
+        session_manager = get_event_session_manager()  # This will start background workers
+        print("[main] 🎬 Event Session Manager initialized")
+        
+        # Step 3: Start Runner in background thread
         # Runner will start CameraPublisher which writes frames to shared_store
         def run_runner_with_store():
             run_runner(shared_store)
@@ -160,17 +166,17 @@ def create_application() -> FastAPI:
         print("[main] 🚀 Started Agent Runner in background thread")
         print("[main] ⏳ Waiting for CameraPublisher to initialize...")
         
-        # Step 3: Wait for CameraPublisher to start and begin publishing frames
+        # Step 4: Wait for CameraPublisher to start and begin publishing frames
         await asyncio.sleep(3)  # Give CameraPublisher time to connect and start publishing
         
-        # Step 4: Start Streaming Service (AWS mode)
+        # Step 5: Start Streaming Service (AWS mode)
         # This will connect to AWS signaling server as camera clients
         nonlocal _streaming_service
         _streaming_service = StreamingService(shared_store)
         asyncio.create_task(_streaming_service.start())
         print("[main] 🎥 Started Streaming Service (AWS mode)")
         
-        # Step 5: Start camera monitoring task
+        # Step 6: Start camera monitoring task
         asyncio.create_task(monitor_cameras_and_start_streams())
         print("[main] 📊 Started camera monitoring task")
         
@@ -189,9 +195,17 @@ def create_application() -> FastAPI:
     @application.on_event("shutdown")
     async def shutdown_event():
         """Stop all services when FastAPI shuts down."""
+        # Stop Event Session Manager (flush all sessions)
+        from app.utils.event_session_manager import get_event_session_manager
+        session_manager = get_event_session_manager()
+        session_manager.stop()
+        print("[main] 🎬 Event Session Manager stopped")
+        
+        # Stop Streaming Service
         nonlocal _streaming_service
         if _streaming_service:
             await _streaming_service.stop()
+        
         print("[main] 🛑 All services stopped")
 
     @application.get("/health")

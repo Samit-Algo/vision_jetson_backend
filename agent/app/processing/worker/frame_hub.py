@@ -125,7 +125,7 @@ class CameraPublisher(Process):
 				# Try to get camera's native FPS from stream metadata
 				try:
 					camera_fps = float(video_stream.average_rate)
-					print(f"[publisher {self.camera_id}] 📊 Camera native FPS: {camera_fps:.1f}")
+					# print(f"[publisher {self.camera_id}] 📊 Camera native FPS: {camera_fps:.1f}")
 				except (AttributeError, ValueError, TypeError):
 					camera_fps = None
 					print(f"[publisher {self.camera_id}] 📊 Camera FPS: unknown (will measure)")
