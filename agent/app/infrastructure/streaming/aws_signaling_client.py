@@ -33,23 +33,24 @@ class AWSSignalingClient:
         self.shared_store = shared_store
         self.user_id = user_id
         self.camera_id = camera_id
-        self.client_id = f"camera:{user_id}"
+        self.client_id = f"camera:{user_id}:{camera_id}"
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self.pc: Optional[RTCPeerConnection] = None
         self._active_connections: Dict[str, RTCPeerConnection] = {}  # viewer_id -> peer_connection
         self._running = False
         self._ice_servers = self._build_ice_servers()
+        self._candidate_types = []  # Track candidate types for verification
     
     def _build_ice_servers(self) -> list:
         """Build ICE servers list."""
         ice_servers = [RTCIceServer(urls="stun:stun.l.google.com:19302")]
         print(f"[aws-client {self.camera_id}] 📡 STUN server configured: stun:stun.l.google.com:19302")
-        
+
         aws_turn_ip = os.getenv("AWS_TURN_IP")
         aws_turn_port = os.getenv("AWS_TURN_PORT")
         aws_turn_user = os.getenv("AWS_TURN_USER")
         aws_turn_pass = os.getenv("AWS_TURN_PASS")
-        
+
         if aws_turn_ip and aws_turn_port and aws_turn_user and aws_turn_pass:
             ice_servers.extend([
                 RTCIceServer(
@@ -65,7 +66,7 @@ class AWSSignalingClient:
             ])
             print(f"[aws-client {self.camera_id}] 🎯 TURN server configured: {aws_turn_ip}:{aws_turn_port} (UDP + TCP)")
         else:
-            # Use hardcoded TURN as fallback
+            # Fallback to hardcoded TURN server (matches frontend DB config)
             ice_servers.extend([
                 RTCIceServer(
                     urls="turn:13.49.159.215:3478?transport=udp",
@@ -78,9 +79,9 @@ class AWSSignalingClient:
                     credential="AlgoOrange2025",
                 ),
             ])
-            print(f"[aws-client {self.camera_id}] 🎯 TURN server configured (hardcoded): 13.49.159.215:3478 (UDP + TCP)")
-        
-        print(f"[aws-client {self.camera_id}] ✅ Total ICE servers: {len(ice_servers)} (STUN first, TURN fallback)")
+            print(f"[aws-client {self.camera_id}] 🎯 TURN server configured (fallback): 13.49.159.215:3478 (UDP + TCP)")
+
+        print(f"[aws-client {self.camera_id}] ✅ Total ICE servers: {len(ice_servers)}")
         return ice_servers
     
     async def connect_and_stream(self) -> None:
@@ -131,10 +132,11 @@ class AWSSignalingClient:
                     await self.pc.setLocalDescription(offer)
                     
                     # Send offer to AWS (will be forwarded to viewers)
+                    viewer_id = f"viewer:{self.user_id}:{self.camera_id}"
                     offer_msg = {
                         "type": "offer",
                         "from": self.client_id,
-                        "to": None,  # Broadcast to all viewers
+                        "to": viewer_id,
                         "sdp": offer.sdp
                     }
                     await websocket.send(json.dumps(offer_msg))
@@ -168,7 +170,17 @@ class AWSSignalingClient:
                         elif state == "checking":
                             print(f"[aws-client {self.camera_id}] 🔍 ICE checking - trying to establish connection...")
                         elif state == "connected" or state == "completed":
-                            print(f"[aws-client {self.camera_id}] ✅ ICE connection established successfully!")
+                            # Show summary based on gathered candidates
+                            turn_count = self._candidate_types.count("turn")
+                            stun_count = self._candidate_types.count("stun")
+                            host_count = self._candidate_types.count("host")
+                            
+                            if turn_count > 0:
+                                print(f"[aws-client {self.camera_id}] ✅ ICE connection established - TURN relay candidates available (cross-network capable)")
+                            elif stun_count > 0:
+                                print(f"[aws-client {self.camera_id}] ✅ ICE connection established - STUN reflexive candidates available (same network/simple NAT)")
+                            else:
+                                print(f"[aws-client {self.camera_id}] ✅ ICE connection established - Direct/host connection")
                     
                     # Handle ICE candidates
                     @self.pc.on("icecandidate")
@@ -181,21 +193,26 @@ class AWSSignalingClient:
                                 cand_str = candidate.candidate.lower()
                                 if "typ host" in cand_str or "typ 0" in cand_str:
                                     candidate_type = "host (direct)"
+                                    self._candidate_types.append("host")
                                 elif "typ srflx" in cand_str or "typ 1" in cand_str:
                                     candidate_type = "srflx (STUN)"
+                                    self._candidate_types.append("stun")
+                                    print(f"[aws-client {self.camera_id}] 📡 STUN candidate gathered (reflexive)")
                                 elif "typ relay" in cand_str or "typ 2" in cand_str:
                                     candidate_type = "relay (TURN)"  # This is what we need for mobile!
-                                    print(f"[aws-client {self.camera_id}] 🎯 TURN relay candidate gathered! (for NAT traversal)")
+                                    self._candidate_types.append("turn")
+                                    print(f"[aws-client {self.camera_id}] 🎯 TURN relay candidate gathered! (for cross-network NAT traversal)")
                                 else:
                                     candidate_type = f"other ({candidate.candidate[:50]}...)"
+                                    self._candidate_types.append("other")
                             
-                            if candidate_type != "relay (TURN)":
+                            if candidate_type not in ["relay (TURN)", "srflx (STUN)"]:
                                 print(f"[aws-client {self.camera_id}] 📡 ICE candidate: {candidate_type}")
                             
                             ice_msg = {
                                 "type": "ice",
                                 "from": self.client_id,
-                                "to": None,
+                                "to": viewer_id,
                                 "candidate": {
                                     "candidate": candidate.candidate,
                                     "sdpMid": candidate.sdpMid,
@@ -207,11 +224,11 @@ class AWSSignalingClient:
                             except Exception as e:
                                 print(f"[aws-client {self.camera_id}] ⚠️  Error sending ICE: {e}")
                         elif not candidate:
-                            # End of candidates
-                            print(f"[aws-client {self.camera_id}] ✅ ICE gathering complete")
-                        elif not candidate:
-                            # End of candidates
-                            print(f"[aws-client {self.camera_id}] ✅ ICE gathering complete")
+                            # End of candidates - show summary
+                            turn_count = self._candidate_types.count("turn")
+                            stun_count = self._candidate_types.count("stun")
+                            host_count = self._candidate_types.count("host")
+                            print(f"[aws-client {self.camera_id}] ✅ ICE gathering complete - Candidates: {turn_count} TURN, {stun_count} STUN, {host_count} Host")
                     
                     # Handle messages from AWS
                     async for message in websocket:
@@ -364,4 +381,3 @@ class AWSSignalingClient:
                 await self.pc.close()
             except Exception:
                 pass
-

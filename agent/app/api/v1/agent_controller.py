@@ -107,13 +107,16 @@ async def create_agent(
         logger.info(f"Agent {agent.id} registered with {len(agent.rules)} rules")
         
         # Convert agent to response format (using same field names)
+        # Convert model (string) to model_ids (list) for response
+        model_ids = [agent.model] if agent.model else []
+        
         return AgentResponse(
             agent_id=agent.id,  # Map id to agent_id for response (backward compatibility)
             task_name=agent.name,  # Map name to task_name for response
             task_type=agent.task_type or "object_detection",
             camera_id=agent.camera_id,
             source_uri=agent.source_uri or "",
-            model_ids=agent.model_ids or [agent.model] if agent.model else [],
+            model_ids=model_ids,
             fps=agent.fps or 5,
             run_mode=agent.run_mode or "continuous",
             rules=agent.rules if isinstance(agent.rules, list) else [],
@@ -149,7 +152,7 @@ async def list_agents(
             task_type=agent.task_type or "object_detection",
             camera_id=agent.camera_id,
             source_uri=agent.source_uri or "",
-            model_ids=agent.model_ids or [agent.model] if agent.model else [],
+            model_ids=[agent.model] if agent.model else [],  # Convert model (string) to model_ids (list)
             fps=agent.fps or 5,
             run_mode=agent.run_mode or "continuous",
             rules=agent.rules if isinstance(agent.rules, list) else [],
@@ -177,13 +180,16 @@ async def get_agent(
     agent = agent_service.get_agent_by_id(agent_id)
     if not agent:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent '{agent_id}' not found")
+    # Convert model (string) to model_ids (list) for response
+    model_ids = [agent.model] if agent.model else []
+    
     return AgentResponse(
         agent_id=agent.id,
         task_name=agent.name,
         task_type=agent.task_type or "object_detection",
         camera_id=agent.camera_id,
         source_uri=agent.source_uri or "",
-        model_ids=agent.model_ids or [agent.model] if agent.model else [],
+        model_ids=model_ids,
         fps=agent.fps or 5,
         run_mode=agent.run_mode or "continuous",
         rules=agent.rules if isinstance(agent.rules, list) else [],

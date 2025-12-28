@@ -19,39 +19,40 @@ class AgentAWSSignalingClient:
     """
     AWS signaling client for agent-specific streams.
     
-    Connects to AWS signaling server as agent:{user_id}:{camera_id}:{agent_id}
+    Connects to AWS signaling server as agent:{user_id}:{agent_id}
     and streams processed frames (with bounding boxes).
     """
     
-    def __init__(self, shared_store: Dict[str, Any], user_id: str, camera_id: str, agent_id: str):
+    def __init__(self, shared_store: Dict[str, Any], user_id: str, agent_id: str, camera_id: str):
         """
         Initialize agent AWS signaling client.
         
         Args:
             shared_store: Shared memory dict from multiprocessing.Manager
             user_id: User ID
-            camera_id: Camera ID
             agent_id: Agent ID
         """
         self.shared_store = shared_store
         self.user_id = user_id
-        self.camera_id = camera_id
         self.agent_id = agent_id
-        self.client_id = f"agent:{camera_id}"
+        self.camera_id = camera_id
+        self.client_id = f"agent:{self.user_id}:{self.camera_id}:{self.agent_id}"
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self.pc: Optional[RTCPeerConnection] = None
         self._running = False
         self._ice_servers = self._build_ice_servers()
+        self._candidate_types = []  # Track candidate types for verification
     
     def _build_ice_servers(self) -> list:
         """Build ICE servers list (same as camera client)."""
         ice_servers = [RTCIceServer(urls="stun:stun.l.google.com:19302")]
-        
+
         aws_turn_ip = os.getenv("AWS_TURN_IP")
+        aws_turn_port = os.getenv("AWS_TURN_PORT")
         aws_turn_port = os.getenv("AWS_TURN_PORT")
         aws_turn_user = os.getenv("AWS_TURN_USER")
         aws_turn_pass = os.getenv("AWS_TURN_PASS")
-        
+
         if aws_turn_ip and aws_turn_port and aws_turn_user and aws_turn_pass:
             ice_servers.extend([
                 RTCIceServer(
@@ -65,8 +66,9 @@ class AgentAWSSignalingClient:
                     credential=aws_turn_pass,
                 ),
             ])
+            print(f"[agent-aws-client {self.agent_id}] 🎯 TURN server configured: {aws_turn_ip}:{aws_turn_port} (UDP + TCP)")
         else:
-            # Fallback to hardcoded TURN
+            # Fallback to hardcoded TURN server (matches frontend DB config)
             ice_servers.extend([
                 RTCIceServer(
                     urls="turn:13.49.159.215:3478?transport=udp",
@@ -79,7 +81,8 @@ class AgentAWSSignalingClient:
                     credential="AlgoOrange2025",
                 ),
             ])
-        
+            print(f"[agent-aws-client {self.agent_id}] 🎯 TURN server configured (fallback): 13.49.159.215:3478 (UDP + TCP)")
+
         return ice_servers
     
     async def connect_and_stream(self) -> None:
@@ -91,9 +94,9 @@ class AgentAWSSignalingClient:
         aws_signaling_url = os.getenv("AWS_SIGNALING_URL", "ws://localhost:8000")
         if not aws_signaling_url or aws_signaling_url == "ws://localhost:8000":
             print(f"[agent-aws-client {self.agent_id}] ⚠️  AWS_SIGNALING_URL not set! Using default localhost:8000")
-        
+
         ws_url = f"{aws_signaling_url.rstrip('/')}/ws/{self.client_id}"
-        
+
         print(f"[agent-aws-client {self.agent_id}] 🔌 Connecting to AWS: {ws_url}")
         
         reconnect_delay = 5
@@ -133,7 +136,7 @@ class AgentAWSSignalingClient:
                     offer_msg = {
                         "type": "offer",
                         "from": self.client_id,
-                        "to": viewer_id,  # Route to specific viewer
+                        "to": viewer_id,
                         "sdp": offer.sdp
                     }
                     await websocket.send(json.dumps(offer_msg))
@@ -156,11 +159,42 @@ class AgentAWSSignalingClient:
                         print(f"[agent-aws-client {self.agent_id}] 🧊 ICE connection state: {state}")
                         if state == "closed" or state == "failed":
                             connection_needs_reconnect = True
+                        elif state == "connected" or state == "completed":
+                            # Show summary based on gathered candidates
+                            turn_count = self._candidate_types.count("turn")
+                            stun_count = self._candidate_types.count("stun")
+                            host_count = self._candidate_types.count("host")
+                            
+                            if turn_count > 0:
+                                print(f"[agent-aws-client {self.agent_id}] ✅ ICE connection established - TURN relay candidates available (cross-network capable)")
+                            elif stun_count > 0:
+                                print(f"[agent-aws-client {self.agent_id}] ✅ ICE connection established - STUN reflexive candidates available (same network/simple NAT)")
+                            else:
+                                print(f"[agent-aws-client {self.agent_id}] ✅ ICE connection established - Direct/host connection")
                     
                     @self.pc.on("icecandidate")
                     async def on_icecandidate(event):
                         candidate = event.candidate
                         if candidate and self.ws:
+                            # Log candidate type to diagnose TURN usage
+                            candidate_type = "unknown"
+                            if candidate.candidate:
+                                cand_str = candidate.candidate.lower()
+                                if "typ host" in cand_str or "typ 0" in cand_str:
+                                    candidate_type = "host (direct)"
+                                    self._candidate_types.append("host")
+                                elif "typ srflx" in cand_str or "typ 1" in cand_str:
+                                    candidate_type = "srflx (STUN)"
+                                    self._candidate_types.append("stun")
+                                    print(f"[agent-aws-client {self.agent_id}] 📡 STUN candidate gathered (reflexive)")
+                                elif "typ relay" in cand_str or "typ 2" in cand_str:
+                                    candidate_type = "relay (TURN)"
+                                    self._candidate_types.append("turn")
+                                    print(f"[agent-aws-client {self.agent_id}] 🎯 TURN relay candidate gathered! (for cross-network NAT traversal)")
+                                else:
+                                    candidate_type = f"other ({candidate.candidate[:50]}...)"
+                                    self._candidate_types.append("other")
+                            
                             ice_msg = {
                                 "type": "ice",
                                 "from": self.client_id,
@@ -176,7 +210,12 @@ class AgentAWSSignalingClient:
                             except Exception as e:
                                 print(f"[agent-aws-client {self.agent_id}] ⚠️  Error sending ICE: {e}")
                         elif not candidate and self.ws:
-                            # End of candidates
+                            # End of candidates - show summary
+                            turn_count = self._candidate_types.count("turn")
+                            stun_count = self._candidate_types.count("stun")
+                            host_count = self._candidate_types.count("host")
+                            print(f"[agent-aws-client {self.agent_id}] ✅ ICE gathering complete - Candidates: {turn_count} TURN, {stun_count} STUN, {host_count} Host")
+                            
                             ice_msg = {
                                 "type": "ice",
                                 "from": self.client_id,
@@ -273,4 +312,3 @@ class AgentAWSSignalingClient:
                 await self.pc.close()
             except Exception:
                 pass
-

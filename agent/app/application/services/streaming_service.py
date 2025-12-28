@@ -103,7 +103,7 @@ class StreamingService:
         
         # Stop all agent clients
         for key in list(self._agent_clients.keys()):
-            user_id, agent_id = key.split(":", 1)
+            user_id, camera_id, agent_id = key.split(":", 2)
             await self.stop_agent_stream(user_id, camera_id, agent_id)
         
         print("[streaming] 🛑 Streaming service stopped")
@@ -130,7 +130,7 @@ class StreamingService:
             print(f"[streaming] ⚠️  Agent stream already running for {agent_id}")
             return
         
-        client = AgentAWSSignalingClient(self.shared_store, user_id, camera_id, agent_id)
+        client = AgentAWSSignalingClient(self.shared_store, user_id, agent_id, camera_id)
         self._agent_clients[key] = client
         
         # Start streaming in background task
