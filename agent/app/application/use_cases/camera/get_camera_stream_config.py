@@ -42,10 +42,10 @@ class GetCameraStreamConfigUseCase:
             # Format: ws://aws-url:8000/ws/viewer:{user_id}
             # Note: Currently all cameras for a user share the same signaling URL
             # The signaling server routes based on user_id
-            signaling_url = f"{aws_signaling_url.rstrip('/')}/ws/viewer:{user_id}"
+            signaling_url = f"{aws_signaling_url.rstrip('/')}/ws/viewer:{user_id}:{camera_id}"
         else:
             signaling_ws = os.getenv("SIGNALING_WS", "ws://localhost:8765")
-            signaling_url = f"{signaling_ws.rstrip('/')}/viewer:{user_id}"
+            signaling_url = f"{signaling_ws.rstrip('/')}/viewer:{user_id}:{camera_id}"
         
         # Build ICE servers (same as generic stream config)
         ice_servers = [

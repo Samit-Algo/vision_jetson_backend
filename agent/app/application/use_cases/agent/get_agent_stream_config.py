@@ -43,10 +43,10 @@ class GetAgentStreamConfigUseCase:
         if aws_signaling_url:
             # Format: ws://aws-url:8000/ws/viewer:{user_id}:{agent_id}
             # Viewer connects as viewer, agent connects as agent
-            signaling_url = f"{aws_signaling_url.rstrip('/')}/ws/viewer:{user_id}:{agent_id}"
+            signaling_url = f"{aws_signaling_url.rstrip('/')}/ws/viewer:{user_id}:{camera.id}:{agent_id}"
         else:
             signaling_ws = os.getenv("SIGNALING_WS", "ws://localhost:8765")
-            signaling_url = f"{signaling_ws.rstrip('/')}/viewer:{user_id}:{agent_id}"
+            signaling_url = f"{signaling_ws.rstrip('/')}/viewer:{user_id}:{camera.id}:{agent_id}"
         
         # Build ICE servers (same as camera stream)
         ice_servers = [
