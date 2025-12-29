@@ -213,6 +213,7 @@ class EventSessionManager:
             video_timestamp: Video timestamp string
             fps: Agent FPS (for video encoding)
         """
+        print(f"[EventSessionManager] 📥 handle_event_frame called: agent_id={agent_id}, rule_index={rule_index}, event_label={event_label}, frame_shape={frame.shape if frame is not None else 'None'}")
         session_key = f"{agent_id}_{rule_index}"
         current_time = now()
         
@@ -241,6 +242,7 @@ class EventSessionManager:
                 )
                 
                 # Send immediate notification (first frame)
+                print(f"[EventSessionManager] 📤 Sending immediate notification for new session...")
                 self._send_immediate_notification(session, frame, detections, video_timestamp)
             
             # Check if session is in valid state
@@ -290,12 +292,14 @@ class EventSessionManager:
         video_timestamp: Optional[str]
     ) -> None:
         """Send immediate notification on first event (single frame)."""
+        print(f"[EventSessionManager] 🔔 _send_immediate_notification called for session: {session.session_id}")
         try:
             event = {
                 "label": session.event_label,
                 "rule_index": session.rule_index,
             }
             
+            print(f"[EventSessionManager] 📤 Calling send_event_to_kafka: event={event}, agent_id={session.agent_id}, camera_id={session.camera_id}")
             send_event_to_kafka(
                 event=event,
                 annotated_frame=frame,
@@ -307,11 +311,13 @@ class EventSessionManager:
                 session_id=session.session_id  # Include session_id for frontend
             )
             print(
-                f"[EventSessionManager] 📤 Immediate notification sent: "
+                f"[EventSessionManager] ✅ Immediate notification sent successfully: "
                 f"session={session.session_id} | event={session.event_label}"
             )
         except Exception as e:
-            print(f"[EventSessionManager] ⚠️  Error sending immediate notification: {e}")
+            print(f"[EventSessionManager] ❌ Error sending immediate notification: {e}")
+            import traceback
+            print(f"[EventSessionManager] Traceback: {traceback.format_exc()}")
     
     def _enqueue_chunk_encode(self, session: EventSession, is_final: bool) -> None:
         """Enqueue a chunk for encoding (non-blocking)."""

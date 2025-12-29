@@ -32,10 +32,16 @@ def evaluate_rules(rules: List[Dict[str, Any]], detections: Dict[str, Any], task
     Returns:
       dict {'label': str, 'rule_index': int} or None
     """
+    # Debug: Log available rules in registry (first call only)
+    if not hasattr(evaluate_rules, '_logged_registry'):
+        print(f"[evaluate_rules] Available rules in registry: {list(rules_registry.keys())}")
+        evaluate_rules._logged_registry = True
+    
     for rule_index, rule in enumerate(rules or []):
         rule_type = (rule.get("type") or "").strip().lower()
         handler = rules_registry.get(rule_type)
         if handler is None:
+            print(f"[evaluate_rules] ⚠️ Rule type '{rule_type}' not found in registry. Available: {list(rules_registry.keys())}")
             continue
         rule_state = state.setdefault(rule_index, {"last_matched_since": None})
         evaluation_result = handler(rule, detections, task, rule_state, now)

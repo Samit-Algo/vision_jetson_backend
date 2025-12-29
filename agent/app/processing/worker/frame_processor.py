@@ -104,3 +104,70 @@ def draw_bounding_boxes(
     
     return processed_frame
 
+
+
+# ========================================================================
+# YOLOv8 Pose Detection
+# ========================================================================
+ 
+def draw_pose_keypoints(
+    frame: np.ndarray,
+    detections: Dict[str, Any],
+    rules: List[Dict[str, Any]]
+) -> np.ndarray:
+    if cv2 is None:
+        return frame
+    keypoints = detections.get("keypoints") or []
+    if not keypoints:
+        return frame
+    target_person = False
+    for rule in rules or []:
+        rule_type = str(rule.get("type", "")).lower()
+        if rule_type == "accident_presence":
+            target_person = True
+            break
+        if rule_type in ["class_presence", "count_at_least", "class_count"]:
+            rule_class = str(rule.get("class", "")).lower()
+            if rule_class == "person":
+                target_person = True
+                break
+            classes = [str(c).lower() for c in (rule.get("classes") or []) if isinstance(c, str)]
+            if "person" in classes:
+                target_person = True
+                break
+    if not target_person:
+        return frame
+ 
+    processed_frame = frame.copy()
+    height, width = processed_frame.shape[:2]
+ 
+    skeleton = [
+        (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
+        (5, 11), (6, 12), (11, 12), (11, 13), (13, 15),
+        (12, 14), (14, 16), (0, 1), (0, 2), (1, 3), (2, 4)
+    ]
+ 
+    for person in keypoints:
+        pts: List[Optional[tuple[int, int]]] = []
+        for kp in person:
+            if kp is None or len(kp) < 2:
+                pts.append(None)
+                continue
+            x = int(max(0, min(int(kp[0]), width - 1)))
+            y = int(max(0, min(int(kp[1]), height - 1)))
+            pts.append((x, y))
+ 
+        for p in pts:
+            if p is None:
+                continue
+            cv2.circle(processed_frame, p, 3, (0, 255, 255), -1)
+ 
+        for a, b in skeleton:
+            pa = pts[a] if a < len(pts) else None
+            pb = pts[b] if b < len(pts) else None
+            if pa is None or pb is None:
+                continue
+            cv2.line(processed_frame, pa, pb, (0, 255, 0), 2)
+ 
+    return processed_frame
+ 

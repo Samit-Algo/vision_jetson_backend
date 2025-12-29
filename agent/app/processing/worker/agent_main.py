@@ -38,8 +38,10 @@ from app.processing.yolo_model.yolo_utils import init_yolo_model, check_event_ma
 from app.processing.rule_engine.engine import evaluate_rules
 from app.processing.worker.video_io import open_video_capture
 from app.processing.worker.detections import extract_detections_from_result
+from app.processing.worker.detections import extract_keypoints_from_result
 from app.processing.worker.frame_hub import reconstruct_frame
 from app.processing.worker.frame_processor import draw_bounding_boxes
+from app.processing.worker.frame_processor import draw_pose_keypoints
 import numpy as np
 
 
@@ -279,6 +281,7 @@ def run_task_worker(task_id: str, shared_store: Optional["Dict[str, Any]"] = Non
                 merged_boxes: List[List[float]] = []
                 merged_classes: List[str] = []
                 merged_scores: List[float] = []
+                merged_keypoints: List[List[List[float]]] = []
                 
                 for model in models:
                     try:
@@ -292,14 +295,25 @@ def run_task_worker(task_id: str, shared_store: Optional["Dict[str, Any]"] = Non
                         merged_boxes.extend(boxes)
                         merged_classes.extend(classes)
                         merged_scores.extend(scores)
+                        keypoints = extract_keypoints_from_result(first_result)
+                        if keypoints:
+                            merged_keypoints.extend(keypoints)
 
                 # Build detections payload for rule engine
                 detections = {
                     "classes": merged_classes,
                     "scores": merged_scores,
                     "boxes": merged_boxes,
+                    "keypoints": merged_keypoints,
                     "ts": now(),
                 }
+                
+                # Debug: Log keypoint extraction (first frame and every 30 frames)
+                if frame_index == 1 or frame_index % 30 == 0:
+                    if merged_keypoints:
+                        print(f"[worker {task_id}] ✅ Keypoints extracted: {len(merged_keypoints)} person(s) with pose data")
+                    else:
+                        print(f"[worker {task_id}] ⚠️ No keypoints extracted! Check if model is a pose model (e.g., yolov8n-pose.pt)")
                 
                 # Draw bounding boxes and publish processed frame for agent stream
                 processed_frame = None
@@ -308,8 +322,11 @@ def run_task_worker(task_id: str, shared_store: Optional["Dict[str, Any]"] = Non
                 
                 if shared_store is not None and loaded_rules:
                     try:
-                        # Draw bounding boxes based on agent rules
-                        processed_frame = draw_bounding_boxes(frame.copy(), detections, loaded_rules)
+                        # Draw pose keypoints if available; otherwise draw bounding boxes
+                        if detections.get("keypoints"):
+                            processed_frame = draw_pose_keypoints(frame.copy(), detections, loaded_rules)
+                        else:
+                            processed_frame = draw_bounding_boxes(frame.copy(), detections, loaded_rules)
                         
                         # Convert processed frame to bytes
                         frame_bytes = processed_frame.tobytes()
@@ -344,10 +361,10 @@ def run_task_worker(task_id: str, shared_store: Optional["Dict[str, Any]"] = Non
                         print(f"[worker {task_id}] 🔍 Rules: {loaded_rules}")
                         print(f"[worker {task_id}] 🔍 Detected classes: {merged_classes[:5]}")  # First 5 only
                     event = evaluate_rules(loaded_rules, detections, task, rule_state, detections["ts"])
-                else:
+                # else:
                     # compatibility path
-                    label = check_event_match(task, merged_classes)
-                    event = {"label": label} if label else None
+                    # label = check_event_match(task, merged_classes)
+                    # event = {"label": label} if label else None
 
                 video_ms = get_video_time_ms(video_capture, frame_index, fps) if not use_hub else (frame_index / float(max(1, fps))) * 1000.0
                 video_ts = format_video_time_ms(video_ms)
@@ -357,8 +374,11 @@ def run_task_worker(task_id: str, shared_store: Optional["Dict[str, Any]"] = Non
                     print(f"[worker {task_id}] 🔔 {event_label} | agent='{agent_name}' | video_time={video_ts}")
                     
                     # Handle event through session manager (with runtime video splitting)
+                    print(f"[worker {task_id}] 📋 Event handling: processed_frame={'exists' if processed_frame is not None else 'None'}, loaded_rules={'exists' if loaded_rules else 'None'}, shared_store={'exists' if shared_store is not None else 'None'}")
+                    
                     if processed_frame is not None:
                         try:
+                            print(f"[worker {task_id}] 📤 Calling handle_event_frame with existing processed_frame")
                             session_manager = get_event_session_manager()
                             session_manager.handle_event_frame(
                                 agent_id=agent_id,
@@ -371,12 +391,21 @@ def run_task_worker(task_id: str, shared_store: Optional["Dict[str, Any]"] = Non
                                 video_timestamp=video_ts,
                                 fps=fps
                             )
+                            print(f"[worker {task_id}] ✅ handle_event_frame completed successfully")
                         except Exception as exc:  # noqa: BLE001
                             print(f"[worker {task_id}] ⚠️  Error handling event frame: {exc}")
+                            import traceback
+                            print(f"[worker {task_id}] Traceback: {traceback.format_exc()}")
                     elif loaded_rules:
                         # If processed_frame wasn't created but we have rules, create it now for event notification
                         try:
-                            processed_frame = draw_bounding_boxes(frame.copy(), detections, loaded_rules)
+                            print(f"[worker {task_id}] 🎨 Creating processed_frame for event notification")
+                            # Draw pose keypoints if available; otherwise draw bounding boxes
+                            if detections.get("keypoints"):
+                                processed_frame = draw_pose_keypoints(frame.copy(), detections, loaded_rules)
+                            else:
+                                processed_frame = draw_bounding_boxes(frame.copy(), detections, loaded_rules)
+                            print(f"[worker {task_id}] 📤 Calling handle_event_frame with newly created processed_frame")
                             session_manager = get_event_session_manager()
                             session_manager.handle_event_frame(
                                 agent_id=agent_id,
@@ -389,8 +418,13 @@ def run_task_worker(task_id: str, shared_store: Optional["Dict[str, Any]"] = Non
                                 video_timestamp=video_ts,
                                 fps=fps
                             )
+                            print(f"[worker {task_id}] ✅ handle_event_frame completed successfully")
                         except Exception as exc:  # noqa: BLE001
                             print(f"[worker {task_id}] ⚠️  Error creating/handling event frame: {exc}")
+                            import traceback
+                            print(f"[worker {task_id}] Traceback: {traceback.format_exc()}")
+                    else:
+                        print(f"[worker {task_id}] ⚠️  Cannot send event: processed_frame is None and loaded_rules is empty")
                 else:
                     pass
                     # print(f"[worker {task_id}] ℹ️ No rule match | agent='{agent_name}' | video_time={video_ts}")
@@ -493,6 +527,7 @@ def run_task_worker(task_id: str, shared_store: Optional["Dict[str, Any]"] = Non
                     merged_boxes: List[List[float]] = []
                     merged_classes: List[str] = []
                     merged_scores: List[float] = []
+                    merged_keypoints: List[List[List[float]]] = []
                     
                     for model in models:
                         try:
@@ -506,11 +541,15 @@ def run_task_worker(task_id: str, shared_store: Optional["Dict[str, Any]"] = Non
                             merged_boxes.extend(boxes)
                             merged_classes.extend(classes)
                             merged_scores.extend(scores)
+                            keypoints = extract_keypoints_from_result(first_result)
+                            if keypoints:
+                                merged_keypoints.extend(keypoints)
 
                     detections = {
                         "classes": merged_classes,
                         "scores": merged_scores,
                         "boxes": merged_boxes,
+                        "keypoints": merged_keypoints,
                         "ts": now(),
                     }
                     
@@ -521,7 +560,11 @@ def run_task_worker(task_id: str, shared_store: Optional["Dict[str, Any]"] = Non
                     
                     if shared_store is not None and loaded_rules:
                         try:
-                            processed_frame = draw_bounding_boxes(frame.copy(), detections, loaded_rules)
+                            # Draw pose keypoints if available; otherwise draw bounding boxes
+                            if detections.get("keypoints"):
+                                processed_frame = draw_pose_keypoints(frame.copy(), detections, loaded_rules)
+                            else:
+                                processed_frame = draw_bounding_boxes(frame.copy(), detections, loaded_rules)
                             frame_bytes = processed_frame.tobytes()
                             height, width = processed_frame.shape[0], processed_frame.shape[1]
                             hub_frame_index = entry.get("frame_index", frame_index) if use_hub and isinstance(entry, dict) else frame_index
@@ -580,7 +623,11 @@ def run_task_worker(task_id: str, shared_store: Optional["Dict[str, Any]"] = Non
                         elif loaded_rules:
                             # If processed_frame wasn't created but we have rules, create it now for event notification
                             try:
-                                processed_frame = draw_bounding_boxes(frame.copy(), detections, loaded_rules)
+                                # Draw pose keypoints if available; otherwise draw bounding boxes
+                                if detections.get("keypoints"):
+                                    processed_frame = draw_pose_keypoints(frame.copy(), detections, loaded_rules)
+                                else:
+                                    processed_frame = draw_bounding_boxes(frame.copy(), detections, loaded_rules)
                                 session_manager = get_event_session_manager()
                                 session_manager.handle_event_frame(
                                     agent_id=agent_id,

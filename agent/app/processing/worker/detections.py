@@ -36,3 +36,38 @@ def extract_detections_from_result(result) -> Tuple[List[List[float]], List[str]
     return boxes, classes, scores
 
 
+def extract_keypoints_from_result(result) -> List[List[List[float]]]:
+    keypoints_list: List[List[List[float]]] = []
+    if result is None:
+        return keypoints_list
+    kp = getattr(result, "keypoints", None)
+    if kp is None:
+        return keypoints_list
+    try:
+        if hasattr(kp, "data") and kp.data is not None:
+            data = kp.data.tolist()
+            for person in data:
+                person_pts: List[List[float]] = []
+                for pt in person:
+                    if pt is None or len(pt) < 2:
+                        continue
+                    x = float(pt[0])
+                    y = float(pt[1])
+                    if len(pt) >= 3:
+                        c = float(pt[2])
+                        person_pts.append([x, y, c])
+                    else:
+                        person_pts.append([x, y])
+                if person_pts:
+                    keypoints_list.append(person_pts)
+        elif hasattr(kp, "xy") and kp.xy is not None:
+            xy = kp.xy.tolist()
+            for person in xy:
+                person_pts = [[float(p[0]), float(p[1])] for p in person if p is not None and len(p) >= 2]
+                if person_pts:
+                    keypoints_list.append(person_pts)
+    except Exception:
+        pass
+    return keypoints_list
+
+
