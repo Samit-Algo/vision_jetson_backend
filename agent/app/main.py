@@ -16,6 +16,8 @@ from dotenv import load_dotenv
 from app.api.v1 import camera_router, agent_router, device_router
 from app.processing.runner.runner import main as run_runner
 from app.application.services.streaming_service import StreamingService
+from app.infrastructure.streaming.agent_ws_fmp4_service import AgentWsFmp4Service
+from app.api.v1.dependencies import get_agent_ws_service
 
 
 def create_application() -> FastAPI:
@@ -61,6 +63,7 @@ def create_application() -> FastAPI:
     # Global shared store (shared between Runner and Streaming Service)
     _shared_store = None
     _streaming_service = None
+    _agent_ws_service = None
 
 
     def get_shared_store():
@@ -175,6 +178,12 @@ def create_application() -> FastAPI:
         _streaming_service = StreamingService(shared_store)
         asyncio.create_task(_streaming_service.start())
         print("[main] 🎥 Started Streaming Service (AWS mode)")
+        
+        # Step 5.5: Initialize Agent WebSocket fMP4 Service
+        # This enables WebSocket streaming of agent-processed frames (with bounding boxes)
+        nonlocal _agent_ws_service
+        _agent_ws_service = get_agent_ws_service(shared_store)
+        print("[main] 🎬 Agent WebSocket fMP4 service initialized")
         
         # Step 6: Start camera monitoring task
         asyncio.create_task(monitor_cameras_and_start_streams())

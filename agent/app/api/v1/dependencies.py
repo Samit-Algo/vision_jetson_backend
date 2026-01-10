@@ -14,6 +14,7 @@ from app.application.services.camera_service import CameraService
 from app.application.services.agent_service import AgentService
 from app.application.services.device_service import DeviceService
 from app.application.services.streaming_service import StreamingService
+from app.infrastructure.streaming.agent_ws_fmp4_service import AgentWsFmp4Service
 from app.di.container import get_container
 
 
@@ -60,6 +61,23 @@ def get_streaming_service(shared_store: Dict[str, Any]) -> StreamingService:
 
 
 _streaming_service: Optional[StreamingService] = None
+_agent_ws_service: Optional[AgentWsFmp4Service] = None
+
+
+def get_agent_ws_service(shared_store: Dict[str, Any]) -> AgentWsFmp4Service:
+    """
+    Get agent WebSocket fMP4 service instance (singleton).
+    
+    Args:
+        shared_store: Shared memory dict from multiprocessing.Manager
+        
+    Returns:
+        AgentWsFmp4Service instance
+    """
+    global _agent_ws_service
+    if _agent_ws_service is None:
+        _agent_ws_service = AgentWsFmp4Service(shared_store)
+    return _agent_ws_service
 
 
 def get_agent_repository() -> AgentRepository:

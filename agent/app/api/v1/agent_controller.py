@@ -7,13 +7,13 @@ FastAPI controller for agent management.
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Body, WebSocket, WebSocketDisconnect, Query
 from app.application.dto.agent_dto import (
     AgentCreateRequest, AgentResponse, AgentDeleteResponse, AgentStreamConfigResponse,
     WebBackendAgentRequest
 )
 from app.application.services.agent_service import AgentService
-from app.api.v1.dependencies import get_agent_service, get_camera_repository
+from app.api.v1.dependencies import get_agent_service, get_camera_repository, get_agent_ws_service
 from app.domain.repositories.camera_repository import CameraRepository
 from app.utils.datetime_utils import now, parse_iso
 
@@ -235,4 +235,68 @@ async def get_agent_stream_config(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get agent stream config: {e}")
+
+
+@router.websocket("/{agent_id}/live/ws")
+async def websocket_agent_stream(
+    websocket: WebSocket,
+    agent_id: str,
+    token: Optional[str] = Query(None, description="Optional authentication token"),
+) -> None:
+    """
+    WebSocket live stream endpoint for agent-processed frames.
+    
+    Auth:
+    - Pass JWT as query param: ?token=... (optional, implement auth if needed)
+    
+    Streaming:
+    - Server broadcasts fragmented MP4 (fMP4) bytes from agent-processed frames.
+    - Reads frames from shared_store[agent_id]
+    - 1 FFmpeg process per agent, shared across viewers.
+    - Streams annotated frames (with YOLO bounding boxes).
+    
+    Example:
+        ws://localhost:8001/api/v1/agents/{agent_id}/live/ws?token=...
+    """
+    # Get agent service to fetch camera_id and verify agent exists
+    agent_service = get_agent_service()
+    agent = agent_service.get_agent_by_id(agent_id)
+    
+    if not agent:
+        await websocket.close(code=1008, reason=f"Agent '{agent_id}' not found")
+        return
+    
+    camera_id = agent.camera_id
+    
+    # Get agent WebSocket service from dependencies
+    # The service is initialized in main.py startup_event
+    try:
+        from app.api.v1.dependencies import _agent_ws_service
+        
+        if not _agent_ws_service:
+            await websocket.close(code=1011, reason="Agent streaming service not initialized")
+            return
+        
+        await websocket.accept()
+        logger.info(f"WebSocket connection accepted for agent {agent_id} stream")
+        
+        try:
+            await _agent_ws_service.add_viewer(agent_id=agent_id, websocket=websocket, camera_id=camera_id)
+            
+            # Keep connection open - receive any messages (ping/pong, etc.)
+            while True:
+                await websocket.receive()
+        except WebSocketDisconnect:
+            logger.info(f"WebSocket disconnected for agent {agent_id}")
+        except Exception as e:
+            logger.error(f"WebSocket error for agent {agent_id}: {e}", exc_info=True)
+        finally:
+            await _agent_ws_service.remove_viewer(agent_id=agent_id, websocket=websocket)
+            logger.info(f"Removed viewer for agent {agent_id} stream")
+    except Exception as e:
+        logger.error(f"Error setting up agent stream for {agent_id}: {e}", exc_info=True)
+        try:
+            await websocket.close(code=1011, reason=f"Service error: {str(e)}")
+        except:
+            pass
 

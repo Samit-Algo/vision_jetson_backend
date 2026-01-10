@@ -91,6 +91,12 @@ class AgentAWSSignalingClient:
             print(f"[agent-aws-client {self.agent_id}] ⚠️  Already running")
             return
         
+        # TEMPORARY: Check if AWS signaling is disabled
+        aws_disabled = os.getenv("AWS_SIGNALING_DISABLED", "false").lower() == "true"
+        if aws_disabled:
+            print(f"[agent-aws-client {self.agent_id}] ⏸️  AWS signaling temporarily disabled (AWS_SIGNALING_DISABLED=true)")
+            return
+        
         aws_signaling_url = os.getenv("AWS_SIGNALING_URL", "ws://localhost:8000")
         if not aws_signaling_url or aws_signaling_url == "ws://localhost:8000":
             print(f"[agent-aws-client {self.agent_id}] ⚠️  AWS_SIGNALING_URL not set! Using default localhost:8000")

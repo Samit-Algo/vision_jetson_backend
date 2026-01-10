@@ -92,6 +92,12 @@ class AWSSignalingClient:
             print(f"[aws-client {self.camera_id}] ⚠️  Already running")
             return
         
+        # TEMPORARY: Check if AWS signaling is disabled
+        aws_disabled = os.getenv("AWS_SIGNALING_DISABLED", "false").lower() == "true"
+        if aws_disabled:
+            print(f"[aws-client {self.camera_id}] ⏸️  AWS signaling temporarily disabled (AWS_SIGNALING_DISABLED=true)")
+            return
+        
         # Get AWS signaling server URL
         aws_signaling_url = os.getenv("AWS_SIGNALING_URL", "ws://localhost:8000")
         if not aws_signaling_url or aws_signaling_url == "ws://localhost:8000":
@@ -99,7 +105,7 @@ class AWSSignalingClient:
             print(f"[aws-client {self.camera_id}] ⚠️  Please set AWS_SIGNALING_URL in .env file (e.g., ws://13.61.105.168:8000)")
         
         ws_url = f"{aws_signaling_url.rstrip('/')}/ws/{self.client_id}"
-        
+
         print(f"[aws-client {self.camera_id}] 🔌 Connecting to AWS: {ws_url}")
         
         reconnect_delay = 5

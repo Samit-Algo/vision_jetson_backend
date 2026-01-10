@@ -8,3 +8,5 @@ vnv
 __pycache__
 agent/application/services/__pycache__/streaming_service.cpython-311.pyc
 agent/worker/__pycache__/agent_main.cpython-311.pyc
+
+event_videos
